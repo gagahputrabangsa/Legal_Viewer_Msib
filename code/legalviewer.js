@@ -1,6 +1,6 @@
 const fs = require('fs');
 const docx = require('docx');
-const { Document, Packer, Paragraph, Table, TableCell, TableRow, Header, Footer, AlignmentType } = docx;
+const { Document, Packer, Paragraph, Table, TableCell, TableRow, Header, Footer,WidthType, AlignmentType } = docx;
 
 // Function to read JSON file
 function readJsonFile(filePath) {
@@ -8,6 +8,7 @@ function readJsonFile(filePath) {
     return JSON.parse(jsonData);
 }
 
+// Function to create table based on JSON data
 // Function to create table based on JSON data
 function createTable(data) {
     let numberingInstance = 0; // Initialize numberingInstance outside of the map function
@@ -21,27 +22,25 @@ function createTable(data) {
                     children: [
                         new Paragraph({
                             children: [
-                                new docx.TextRun({ text: 'NO.', bold: true, font: "Orbi", fontSize: 12 }),
+                                new docx.TextRun({ text: 'NO.', bold: true, font: "Bookman Old Style", size: 22 }),
                             ],
                             alignment: AlignmentType.CENTER,
                         }),
                     ],
+                    width: { size: 5, type: WidthType.PERCENTAGE }, // 5% width
                     shading: { fill: 'd9e2f3' },
                 }),
                 // Cell for 'SAAT INI'
-                
                 new TableCell({
                     children: [
                         new Paragraph({
                             children: [
-                                new docx.TextRun({ text: 'SAAT INI',
-                                 bold: true,
-                                  font: "Orbi", 
-                                   fontSize: 12 }),
+                                new docx.TextRun({ text: 'SAAT INI', bold: true, font: "Bookman Old Style", size: 22 }),
                             ],
                             alignment: AlignmentType.CENTER,
                         }),
                     ],
+                    width: { size: 35, type: WidthType.PERCENTAGE }, // 35% width
                     verticalAlign: docx.VerticalAlign.CENTER,
                     shading: { fill: 'd9e2f3' },
                 }),
@@ -50,12 +49,13 @@ function createTable(data) {
                     children: [
                         new Paragraph({
                             children: [
-                                new docx.TextRun({ text: 'PERUBAHAN', color: '#4472c4', bold: true, font: "Orbi", fontSize: 12 }),
+                                new docx.TextRun({ text: 'PERUBAHAN', color: '#4472c4', bold: true, font: "Bookman Old Style", size: 22 }),
                             ],
                             alignment: AlignmentType.CENTER,
                             indent: { left: 200, right: 200 },
                         }),
                     ],
+                    width: { size: 35, type: WidthType.PERCENTAGE }, // 35% width
                     verticalAlign: docx.VerticalAlign.CENTER,
                     shading: { fill: 'd9e2f3' },
                 }),
@@ -64,19 +64,20 @@ function createTable(data) {
                     children: [
                         new Paragraph({
                             children: [
-                                new docx.TextRun({ text: 'KETERANGAN', bold: true, font: "Orbi", fontSize: 12 }),
+                                new docx.TextRun({ text: 'KETERANGAN', bold: true, font: "Bookman Old Style", size: 22 }),
                             ],
                             alignment: AlignmentType.CENTER,
                             indent: { left: 200, right: 200 },
                         }),
                     ],
+                    width: { size: 25, type: WidthType.PERCENTAGE }, // 25% width
                     verticalAlign: docx.VerticalAlign.CENTER,
                     shading: { fill: 'd9e2f3' },
                 }),
             ],
             //==========IMPORTANT
             tableHeader: true,
-        }),
+        }),   
     ...data.map((item, index) => {
         const cleanedContent = item.content.replace(/;/g, '.');
         // Generate dynamic reference names for numbering
@@ -123,8 +124,8 @@ function createTable(data) {
                     children: [
                         new docx.TextRun({
                             text: contentPart,
-                            font: "Orbi", // Add font property
-                            fontSize: 12, // Add fontSize property
+                            font: "Bookman Old Style", // Add font property
+                            size: 22, // Add fontSize property
                         }),
                     ],
                     numbering,
@@ -134,58 +135,75 @@ function createTable(data) {
                 }));
             });
 
-            const pasalAndBabParagraph = new Paragraph({
+            const pasalParagraph = new Paragraph({
                 children: [
-                    new docx.TextRun({
-                        text: item.bab ? `Bab ${item.bab}` : '',
-                        bold: true,
-                        // break: 1,
-                        font: "Orbi", // Add font property
-                        fontSize: 12, // Add fontSize property
-                    }),
-                    new docx.TextRun({
-                        text: item.bab ? '\nKetentuan Umum\n' : '',
-                        bold: true,
-                        break: 1,
-                        font: "Orbi", // Add font property
-                        fontSize: 12, // Add fontSize property
-                    }),
                     new docx.TextRun({
                         text: item.pasal ? `${item.pasal.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}` : '',
                         bold: true,
-                        break: 1,
-                        font: "Orbi", // Add font property
-                        fontSize: 12, // Add fontSize property
+                        font: "Bookman Old Style", // Add font property
+                        size: 22, // Add fontSize property
                     }),
                 ],
                 alignment: AlignmentType.CENTER,
             });
+
+            const babParagraph = item.bab ? new Paragraph({
+                children: [
+                    new docx.TextRun({
+                        text: 'Bab ' + item.bab,
+                        bold: true,
+                        font: "Bookman Old Style", // Mengubah font menjadi "Bookman Old Style"
+                        size: 22, // Menggunakan properti size untuk mengatur ukuran font
+                    }),
+                    new docx.TextRun({
+                        text: item.judulbab, // ambil dari BabContext /////////
+                        break: 1,
+                        bold: true,
+                        font: "Bookman Old Style", // Mengubah font menjadi "Bookman Old Style"
+                        size: 22, // Menggunakan properti size untuk mengatur ukuran font
+                    }),
+                ],
+                alignment: AlignmentType.CENTER,
+            }) : null;
+            
             
 
             return [
+                babParagraph ? new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
+                        new TableCell({
+                            children: [babParagraph],
+                            verticalAlign: docx.VerticalAlign.CENTER,
+                            shading: { fill: 'F8E8EE' },
+                        }),
+                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
+                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
+                    ],
+                }) : null,
                 // Row for 'SAAT INI' and 'PERUBAHAN'
                 new TableRow({
                     children: [
                         // Cell for 'NO.'
                         new TableCell({
-                            children: [new Paragraph({ text: String(index + 1), alignment: AlignmentType.CENTER, font: "Orbi", fontSize: 12 })], // Add font and fontSize properties
-                            alignment: AlignmentType.CENTER,
+                            children: [new Paragraph({ text: String(index + 1), alignment: AlignmentType.CENTER, font: "Bookman Old Style",size: 22 })], 
+                            
                         }),
                         
                         // Cell for 'SAAT INI' and 'PERUBAHAN'
                         new TableCell({
                             children: [
-                                pasalAndBabParagraph,
+                                pasalParagraph,
                                 ...contentParagraphs,
                             ],
                             alignment: AlignmentType.JUSTIFIED,
                         }),
                         // Empty cells for 'KETERANGAN'
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Orbi", fontSize: 12 }), // Add font and fontSize properties
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Orbi", fontSize: 12 }), // Add font and fontSize properties
+                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }), 
+                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }), 
                     ],
                 }),
-            ];
+            ].filter(Boolean); // Filter out null elements
         }).flat(), // Flatten the array of rows
     ];
 
@@ -212,14 +230,15 @@ function createWordDocument(data) {
 
     // Combine first three words into a paragraph
     const paragraph = new Paragraph({
-        children: [new docx.TextRun({ text: firstThreeWords, bold: true, fontSize: 14 })],
+        children: [new docx.TextRun({ text: firstThreeWords, bold: true,font: "Bookman Old Style", size: 22 })],
         alignment: AlignmentType.CENTER,
+        
     });
 
     // If there are more than three words, add a break and include the remaining words
     if (words.length > 5) {
         const remainingWords = words.slice(5).join(' ');
-        paragraph.addChildElement(new docx.TextRun({ text: '\n' + remainingWords, bold: true, fontSize: 14, break: 1}));
+        paragraph.addChildElement(new docx.TextRun({ text: '\n' + remainingWords, bold: true, size: 22,font: "Bookman Old Style", break: 1}));
     }
 
     // Create table using createTable function with JSON data
@@ -261,16 +280,34 @@ function createWordDocument(data) {
                         size: {
                             orientation: docx.PageOrientation.LANDSCAPE,
                         },
+                        margin: {
+                            top: 720,
+                            right: 720,
+                            bottom: 720,
+                            left: 720,
+                        },
                     },
                 },
                 headers: {
                     default: new Header({
                         children: [new Paragraph("Header placement")], // Add your header here
+                        properties:{
+                            footer:{
+                                marginTop: 50,
+                                marginBottom:50,
+                            }
+                        }
                     }),
                 },
                 footers: {
                     default: new Footer({
-                        children: [new Paragraph("Footer placement")],
+                        children: [new Paragraph("Generated with https://github.com/gagahputrabangsa/Legal_Viewer_Msib.git")],
+                        properties:{
+                            footer:{
+                                marginTop: 50,
+                                marginBottom:50,
+                            }
+                        }
                     }),
                 },
                 children: children,
