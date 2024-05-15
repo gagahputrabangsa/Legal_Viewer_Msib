@@ -1,6 +1,6 @@
 const fs = require('fs');
 const docx = require('docx');
-const { Document, Packer, Paragraph, Table, TableCell, TableRow, Header, Footer,WidthType, AlignmentType } = docx;
+const { Document, Packer,Media, Paragraph, Table, TableCell, TableRow, Header, Footer,WidthType, AlignmentType } = docx;
 
 // Function to read JSON file
 function readJsonFile(filePath) {
@@ -314,6 +314,8 @@ function createWordDocument(data) {
             },
         ],
     });
+
+    
     
 
     return document;
