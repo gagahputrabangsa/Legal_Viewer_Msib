@@ -1,340 +1,391 @@
 const fs = require('fs');
+const https = require('https');
+const dotenv = require('dotenv');
 const docx = require('docx');
-const { Document, Packer,Media, Paragraph, Table, TableCell, TableRow, Header, Footer,WidthType, AlignmentType } = docx;
+const { Document, Packer, Paragraph, Table, TableCell, TableRow, Header, Footer, WidthType, AlignmentType } = docx;
 
-// Function to read JSON file
-function readJsonFile(filePath) {
+// Load konfigurasi dari file .env
+dotenv.config();
+
+// Mendapatkan variabel konfigurasi dari file .env
+const OPENSEARCH_ADDRESS = process.env.OPENSEARCH_ADDRESS;
+const OPENSEARCH_PORT = process.env.OPENSEARCH_PORT;
+const OPENSEARCH_USERNAME = process.env.OPENSEARCH_USERNAME;
+const OPENSEARCH_PASSWORD = process.env.OPENSEARCH_PASSWORD;
+
+// Nama indeks OpenSearch
+const INDEX_NAME = 'law_analyzer_msib';
+
+// Mengambil ID dari argumen command line
+const args = process.argv.slice(2);
+const idIndex = args.indexOf('-id');
+if (idIndex === -1 || idIndex === args.length - 1) {
+  console.error("Error: Please provide an ID using the '-id' argument.");
+  process.exit(1);
+}
+let idValue = args[idIndex + 1];
+
+// Menghapus tanda petik dari nilai ID
+idValue = idValue.replace(/^'|'$/g, '');
+
+// Konfigurasi koneksi ke cluster OpenSearch
+const options = {
+  hostname: OPENSEARCH_ADDRESS,
+  port: OPENSEARCH_PORT,
+  path: `/${INDEX_NAME}/_search`,
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Basic ' + Buffer.from(`${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}`).toString('base64')
+  },
+  rejectUnauthorized: false // Setel ini ke false
+};
+
+// Query pencarian untuk mencari dokumen berdasarkan ID dengan mengecualikan beberapa field
+const searchQuery = {
+  _source: {
+    excludes: [
+      "Blocks.ContentText.MainVector", "Blocks.ContentText.AdditionalContext.Vector"
+    ]
+  },
+  query: {
+    ids: {
+      values: [idValue]
+    }
+  }
+};
+
+// Body permintaan dengan query pencarian
+const postData = JSON.stringify(searchQuery);
+
+async function fetchOpensearchData() {
+  return new Promise((resolve, reject) => {
+    // Buat permintaan HTTPS
+    const req = https.request(options, (res) => {
+      console.log(`Status Code: ${res.statusCode}`);
+      let data = '';
+
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          // Simpan respons ke dalam file JSON
+          fs.writeFileSync('D:/magang/json_ke_word/new_file/response.json', JSON.stringify(response, null, 2));
+          console.log('Response saved to response.json');
+          resolve();
+        } catch (error) {
+          console.error('Error parsing JSON response:', error);
+          reject(error);
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error(error);
+      reject(error);
+    });
+
+    // Kirim data
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function parseAndModifyData() {
+  return new Promise((resolve, reject) => {
+    // Read the JSON file
+    fs.readFile('D:/magang/json_ke_word/new_file/response.json', 'utf8', (err, data) => {
+      if (err) {
+        console.error('Error reading file:', err);
+        reject(err);
+        return;
+      }
+      try {
+        // Parse JSON
+        const jsonData = JSON.parse(data);
+
+        // Array to store modified data
+        let modifiedData = [];
+
+        // Variable to store the previous chapter value
+        let previousBab = null;
+
+        // Process modification of data
+        jsonData.hits.hits.forEach(item => {
+          item._source.Blocks.forEach(block => {
+            if (block.ContentText && Array.isArray(block.ContentText)) {
+              let combinedContent = "";
+              block.ContentText.forEach((content) => {
+                // Check if content is an object
+                if (typeof content === 'object' && content !== null) {
+                  // Modify text content
+                  let modifiedValue = content.Value.replace(/dimaksud pada ayat \((\d+)\)/g, 'dimaksud pada ayat $1');
+                  modifiedValue = modifiedValue.replace(/dimaksud dalam Pasal (\d+) ayat \((\d+)\)/g, 'dimaksud dalam Pasal $1 ayat $2');
+                  let modifiedRef = content.Ref ? content.Ref.replace(/Ayat \((\d+)\)/g, '($1)') : null;
+                  // Remove patterns like -number-
+                  modifiedValue = modifiedValue.replace(/-\d+-/g, '');
+                  // Add new patterns
+                  modifiedValue = modifiedValue.replace(/(\d+)\. /g, '($1) ');
+                  modifiedValue = modifiedValue.replace(/\. \((\d+)\)/g, '.\n($1)');
+                  combinedContent += `${modifiedRef ? `${modifiedRef} ` : ''}${modifiedValue}\n`;
+                }
+              });
+
+              // Set chapter value according to the required logic
+              let modifiedBab = block.Bab;
+              if (modifiedBab === previousBab) {
+                modifiedBab = null; // Set to null if the same as the previous chapter value
+              } else {
+                previousBab = block.Bab; // Update the previous chapter value
+              }
+
+              modifiedData.push({
+                bab: modifiedBab,
+                judulbab: block.BabContext,
+                bagian: block.Bagian,
+                paragraf: block.Paragraf,
+                pasal: block.Pasal ? `pasal-${block.Pasal.split(' ')[1]}` : null, 
+                ref: null,
+                type: "CONTENT_PASAL",
+                content: combinedContent.trim(),
+                additional_context: [],
+                context: item._source.Judul
+              });
+            }
+          });
+        });
+
+        // Write back to a JSON file
+        fs.writeFile('D:/magang/json_ke_word/new_file/bahan/updatedss.json', JSON.stringify(modifiedData, null, 2), 'utf8', (err) => {
+          if (err) {
+            console.error('Error writing file:', err);
+            reject(err);
+            return;
+          }
+          console.log('File updatedss.json has been successfully saved.');
+          resolve();
+        });
+
+      } catch (error) {
+        console.error('Error parsing JSON:', error);
+        reject(error);
+      }
+    });
+  });
+}
+
+async function generateWordDocument() {
+  function readJsonFile(filePath) {
     const jsonData = fs.readFileSync(filePath, 'utf8');
     return JSON.parse(jsonData);
-}
+  }
 
-// Function to create table based on JSON data
-// Function to create table based on JSON data
-function createTable(data) {
-    let numberingInstance = 0; // Initialize numberingInstance outside of the map function
+  function createTable(data) {
+    let numberingInstance = 0;
+    let alphabeticalNumberingInstance = -1;
 
-    // Map through JSON data to create rows
     const tableRows = [
-        new TableRow({
-            children: [ 
-                // Cell for 'NO.'
-                new TableCell({
-                    children: [
-                        new Paragraph({
-                            children: [
-                                new docx.TextRun({ text: 'NO.', bold: true, font: "Bookman Old Style", size: 22 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                        }),
-                    ],
-                    width: { size: 5, type: WidthType.PERCENTAGE }, // 5% width
-                    shading: { fill: 'd9e2f3' },
-                }),
-                // Cell for 'SAAT INI'
-                new TableCell({
-                    children: [
-                        new Paragraph({
-                            children: [
-                                new docx.TextRun({ text: 'SAAT INI', bold: true, font: "Bookman Old Style", size: 22 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                        }),
-                    ],
-                    width: { size: 35, type: WidthType.PERCENTAGE }, // 35% width
-                    verticalAlign: docx.VerticalAlign.CENTER,
-                    shading: { fill: 'd9e2f3' },
-                }),
-                // Cell for 'PERUBAHAN'
-                new TableCell({
-                    children: [
-                        new Paragraph({
-                            children: [
-                                new docx.TextRun({ text: 'PERUBAHAN', color: '#4472c4', bold: true, font: "Bookman Old Style", size: 22 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                            indent: { left: 200, right: 200 },
-                        }),
-                    ],
-                    width: { size: 35, type: WidthType.PERCENTAGE }, // 35% width
-                    verticalAlign: docx.VerticalAlign.CENTER,
-                    shading: { fill: 'd9e2f3' },
-                }),
-                // Cell for 'KETERANGAN'
-                new TableCell({
-                    children: [
-                        new Paragraph({
-                            children: [
-                                new docx.TextRun({ text: 'KETERANGAN', bold: true, font: "Bookman Old Style", size: 22 }),
-                            ],
-                            alignment: AlignmentType.CENTER,
-                            indent: { left: 200, right: 200 },
-                        }),
-                    ],
-                    width: { size: 25, type: WidthType.PERCENTAGE }, // 25% width
-                    verticalAlign: docx.VerticalAlign.CENTER,
-                    shading: { fill: 'd9e2f3' },
-                }),
-            ],
-            //==========IMPORTANT
-            tableHeader: true,
-        }),   
-    ...data.map((item, index) => {
+      new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new docx.TextRun({ text: 'NO.', bold: true, font: "Bookman Old Style", size: 22 })], alignment: AlignmentType.CENTER })],
+            width: { size: 5, type: WidthType.PERCENTAGE },
+            shading: { fill: 'd9e2f3' },
+          }),
+          new TableCell({
+            children: [new Paragraph({ children: [new docx.TextRun({ text: 'SAAT INI', bold: true, font: "Bookman Old Style", size: 22 })], alignment: AlignmentType.CENTER })],
+            width: { size: 35, type: WidthType.PERCENTAGE },
+            verticalAlign: docx.VerticalAlign.CENTER,
+            shading: { fill: 'd9e2f3' },
+          }),
+          new TableCell({
+            children: [new Paragraph({ children: [new docx.TextRun({ text: 'PERUBAHAN', color: '#4472c4', bold: true, font: "Bookman Old Style", size: 22 })], alignment: AlignmentType.CENTER })],
+            width: { size: 35, type: WidthType.PERCENTAGE },
+            verticalAlign: docx.VerticalAlign.CENTER,
+            shading: { fill: 'd9e2f3' },
+          }),
+          new TableCell({
+            children: [new Paragraph({ children: [new docx.TextRun({ text: 'KETERANGAN', bold: true, font: "Bookman Old Style", size: 22 })], alignment: AlignmentType.CENTER })],
+            width: { size: 25, type: WidthType.PERCENTAGE },
+            verticalAlign: docx.VerticalAlign.CENTER,
+            shading: { fill: 'd9e2f3' },
+          }),
+        ],
+        tableHeader: true,
+      }),
+      ...data.map((item, index) => {
         const cleanedContent = item.content.replace(/;/g, '.');
-        // Generate dynamic reference names for numbering
         const numberingReference = `my-numbering-${index + 1}`;
         const otherNumberingReference = `my-other-numbering-${index + 1}`;
-        // Reset numberingInstance at the beginning of each iteration
         numberingInstance = 0;
-        
-        const paragraphs = item.content.split(/(?=[0-9a-zA-Z]\. |\([0-9]+\)\s)/gm)
-        .map(contentPart => contentPart.trim());
+        alphabeticalNumberingInstance = -1;
+
+        const paragraphs = item.content.split(/(?=[0-9a-zA-Z]\. |\([0-9]+\)\s)/gm).map(contentPart => contentPart.trim());
         const contentParagraphs = [];
-        
-        paragraphs.forEach((contentPart, paragraphIndex) => {
-            let numbering = undefined;
-            
-            if (contentPart.match(/^\(\d+\)\s/)) {
-                numberingInstance++;
-                numbering = {
-                        reference: numberingReference,
-                        level: 0,
-                        format: docx.LevelFormat.BULLET,
-                        text: `${numberingInstance}`,
-                    }; 
 
-                    contentPart = contentPart.replace(/^\(\d+\)\s/, ''); 
-                } else if (contentPart.match(/^[a-z]\.\s/)) {
-                    const charCode = 97 + (numberingInstance - 1);
-                    numbering = {
-                        reference: otherNumberingReference,
-                        level: 0,
-                        format: docx.LevelFormat.BULLET,
-                        text: `${String.fromCharCode(charCode)}.`,
-                    };
-                    contentPart = contentPart.replace(/^[a-z]\.\s/, '');
-                }
+        paragraphs.forEach((contentPart) => {
+          let numbering = undefined;
 
-                // Remove non-letter characters from the end of the sentence
-                const lastChar = contentPart.charAt(contentPart.length - 1);
-                if (!lastChar.match(/[a-zA-Z0-9]/)) {
-                    contentPart = contentPart.slice(0, -1); // Remove the last character
-                }
+          if (contentPart.match(/^\(\d+\)\s/)) {
+            numberingInstance++;
+            alphabeticalNumberingInstance = 0;
+            numbering = {
+              reference: numberingReference,
+              level: 0,
+              format: docx.LevelFormat.BULLET,
+              text: `${numberingInstance}`,
+            };
+            contentPart = contentPart.replace(/^\(\d+\)\s/, '');
+          } else if (contentPart.match(/^[a-z]\.\s/)) {
+            if (alphabeticalNumberingInstance === -1) {
+              alphabeticalNumberingInstance = 0;
+            }
+            const charCode = 'a'.charCodeAt(0) + alphabeticalNumberingInstance;
+            alphabeticalNumberingInstance++;
+            numbering = {
+              reference: otherNumberingReference,
+              level: 0,
+              format: docx.LevelFormat.LOWER_LETTER,
+              text: `${String.fromCharCode(charCode)}.`,
+            };
+            contentPart = contentPart.replace(/^[a-z]\.\s/, '');
+          }
 
-                contentParagraphs.push(new Paragraph({
-                    children: [
-                        new docx.TextRun({
-                            text: contentPart,
-                            font: "Bookman Old Style", // Add font property
-                            size: 22, // Add fontSize property
-                        }),
-                    ],
-                    numbering,
-                    alignment: AlignmentType.JUSTIFIED,
-                    spacing: { after: 100, before: 100 },
-                    indent: { left: 400, right: 100 },
-                }));
-            });
+          const lastChar = contentPart.charAt(contentPart.length - 1);
+          if (!lastChar.match(/[a-zA-Z0-9]/)) {
+            contentPart = contentPart.slice(0, -1);
+          }
 
-            const pasalParagraph = new Paragraph({
-                children: [
-                    new docx.TextRun({
-                        text: item.pasal ? `${item.pasal.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}` : '',
-                        bold: true,
-                        font: "Bookman Old Style", // Add font property
-                        size: 22, // Add fontSize property
-                    }),
-                ],
-                alignment: AlignmentType.CENTER,
-            });
+          contentParagraphs.push(new Paragraph({
+            children: [new docx.TextRun({ text: contentPart, font: "Bookman Old Style", size: 22 })],
+            numbering,
+            alignment: AlignmentType.JUSTIFIED,
+            spacing: { after: 100, before: 100 },
+            indent: { left: 400, right: 100 },
+          }));
+        });
 
-            const babParagraph = item.bab ? new Paragraph({
-                children: [
-                    new docx.TextRun({
-                        text: 'Bab ' + item.bab,
-                        bold: true,
-                        font: "Bookman Old Style", // Mengubah font menjadi "Bookman Old Style"
-                        size: 22, // Menggunakan properti size untuk mengatur ukuran font
-                    }),
-                    new docx.TextRun({
-                        text: item.judulbab, // ambil dari BabContext /////////
-                        break: 1,
-                        bold: true,
-                        font: "Bookman Old Style", // Mengubah font menjadi "Bookman Old Style"
-                        size: 22, // Menggunakan properti size untuk mengatur ukuran font
-                    }),
-                ],
-                alignment: AlignmentType.CENTER,
-            }) : null;
-            
-            
+        const pasalParagraph = new Paragraph({
+          children: [new docx.TextRun({ text: item.pasal ? `${item.pasal.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}` : '', bold: true, font: "Bookman Old Style", size: 22 })],
+          alignment: AlignmentType.CENTER,
+        });
 
-            return [
-                babParagraph ? new TableRow({
-                    children: [
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
-                        new TableCell({
-                            children: [babParagraph],
-                            verticalAlign: docx.VerticalAlign.CENTER,
-                            shading: { fill: 'F8E8EE' },
-                        }),
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }),
-                    ],
-                }) : null,
-                // Row for 'SAAT INI' and 'PERUBAHAN'
-                new TableRow({
-                    children: [
-                        // Cell for 'NO.'
-                        new TableCell({
-                            children: [new Paragraph({ text: String(index + 1), alignment: AlignmentType.CENTER, font: "Bookman Old Style",size: 22 })], 
-                            
-                        }),
-                        
-                        // Cell for 'SAAT INI' and 'PERUBAHAN'
-                        new TableCell({
-                            children: [
-                                pasalParagraph,
-                                ...contentParagraphs,
-                            ],
-                            alignment: AlignmentType.JUSTIFIED,
-                        }),
-                        // Empty cells for 'KETERANGAN'
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }), 
-                        new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER, font: "Bookman Old Style", size: 22 }), 
-                    ],
-                }),
-            ].filter(Boolean); // Filter out null elements
-        }).flat(), // Flatten the array of rows
+        const babParagraph = item.bab ? new Paragraph({
+          children: [
+            new docx.TextRun({ text: item.bab, bold: true, font: "Bookman Old Style", size: 22 }),
+            new docx.TextRun({ text: item.judulbab, break: 1, bold: true, font: "Bookman Old Style", size: 22 }),
+          ],
+          alignment: AlignmentType.CENTER,
+        }) : null;
+
+        return [
+          babParagraph ? new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER }),
+              new TableCell({ children: [babParagraph], verticalAlign: docx.VerticalAlign.CENTER, shading: { fill: 'F8E8EE' } }),
+              new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER }),
+              new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER }),
+            ],
+          }) : null,
+          new TableRow({
+            children: [
+              new TableCell({ children: [new Paragraph({ text: String(index + 1), alignment: AlignmentType.CENTER, font: "Bookman Old Style", size: 22 })] }),
+              new TableCell({ children: [pasalParagraph, ...contentParagraphs], alignment: AlignmentType.JUSTIFIED }),
+              new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER }),
+              new TableCell({ children: [new Paragraph('')], verticalAlign: docx.VerticalAlign.CENTER }),
+            ],
+          }),
+        ].filter(Boolean);
+      }).flat(),
     ];
 
-    // Create table with rows 
-    const table = new Table({
-        rows: tableRows,
-    });
+    const table = new Table({ rows: tableRows });
     return table;
-}
+  }
 
-
-// Function to create Word document
-function createWordDocument(data) {
-    const jsonData = data[0]; // Assuming you are taking the first object from the JSON array
-
-    // Get the context from JSON data
+  function createWordDocument(data) {
+    const jsonData = data[0];
     const context = jsonData.context;
-
-    // Split the context into words
     const words = context.split(' ');
-
-    // Take the first three words
     const firstThreeWords = words.slice(0, 5).join(' ');
 
-    // Combine first three words into a paragraph
     const paragraph = new Paragraph({
-        children: [new docx.TextRun({ text: firstThreeWords, bold: true,font: "Bookman Old Style", size: 22 })],
-        alignment: AlignmentType.CENTER,
-        
+      children: [new docx.TextRun({ text: firstThreeWords, bold: true, font: "Bookman Old Style", size: 22 })],
+      alignment: AlignmentType.CENTER,
     });
 
-    // If there are more than three words, add a break and include the remaining words
     if (words.length > 5) {
-        const remainingWords = words.slice(5).join(' ');
-        paragraph.addChildElement(new docx.TextRun({ text: '\n' + remainingWords, bold: true, size: 22,font: "Bookman Old Style", break: 1}));
+      const remainingWords = words.slice(5).join(' ');
+      paragraph.addChildElement(new docx.TextRun({ text: '\n' + remainingWords, bold: true, size: 22, font: "Bookman Old Style", break: 1 }));
     }
 
-    // Create table using createTable function with JSON data
     const content = createTable(data);
-
-    // Combine paragraph and content into children array
     const children = [paragraph, content];
 
-    // Create numbering configuration
     const numberingConfig = data.map((item, index) => ({
-        reference: `my-numbering-${index + 1}`,
-        levels: [
-            {
-                level: 0,
-                format: docx.LevelFormat.DECIMAL,
-                text: "(%1)",
-            },
-        ],
+      reference: `my-numbering-${index + 1}`,
+      levels: [{ level: 0, format: docx.LevelFormat.DECIMAL, text: "(%1)" }],
     })).concat(data.map((item, index) => ({
-        reference: `my-other-numbering-${index + 1}`,
-        levels: [
-            {
-                level: 0,
-                format: docx.LevelFormat.LOWER_LETTER,
-                text: "%1.",
-            },
-        ],
+      reference: `my-other-numbering-${index + 1}`,
+      levels: [{ level: 0, format: docx.LevelFormat.LOWER_LETTER, text: "%1." }],
     })));
 
-    // Create Word document
     const document = new Document({
-        numbering: {
-            config: numberingConfig,
+      numbering: { config: numberingConfig },
+      sections: [{
+        properties: {
+          page: {
+            size: { orientation: docx.PageOrientation.LANDSCAPE },
+            margin: { top: 720, right: 720, bottom: 720, left: 720 },
+          },
         },
-        sections: [
-            {
-                properties: {
-                    page: {
-                        size: {
-                            orientation: docx.PageOrientation.LANDSCAPE,
-                        },
-                        margin: {
-                            top: 720,
-                            right: 720,
-                            bottom: 720,
-                            left: 720,
-                        },
-                    },
-                },
-                headers: {
-                    default: new Header({
-                        children: [new Paragraph("Header placement")], // Add your header here
-                        properties:{
-                            footer:{
-                                marginTop: 50,
-                                marginBottom:50,
-                            }
-                        }
-                    }),
-                },
-                footers: {
-                    default: new Footer({
-                        children: [new Paragraph("Generated with https://github.com/gagahputrabangsa/Legal_Viewer_Msib.git")],
-                        properties:{
-                            footer:{
-                                marginTop: 50,
-                                marginBottom:50,
-                            }
-                        }
-                    }),
-                },
-                children: children,
-            },
-        ],
+        headers: { default: new Header({ children: [new Paragraph("Header placement")], properties: { footer: { marginTop: 50, marginBottom: 50 } } }) },
+        footers: { default: new Footer({ children: [new Paragraph("Generated with https://github.com/gagahputrabangsa/Legal_Viewer_Msib.git")], properties: { footer: { marginTop: 50, marginBottom: 50 } } }) },
+        children: children,
+      }],
     });
 
-    
-    
-
     return document;
+  }
+
+  const jsonFilePath = 'D:/magang/json_ke_word/new_file/bahan/updatedss.json';
+  const jsonData = readJsonFile(jsonFilePath);
+  const document = createWordDocument(jsonData);
+
+  Packer.toBuffer(document).then((buffer) => {
+    const args = process.argv.slice(2);
+    const outputArgIndex = args.indexOf('-out');
+    let outputPath = 'output.docx';
+
+    if (outputArgIndex !== -1 && args[outputArgIndex + 1]) {
+      outputPath = args[outputArgIndex + 1];
+    } else {
+      console.error('Error: Output path not specified. Use -out <outputPath> to specify the output file.');
+      process.exit(1);
+    }
+
+    fs.writeFileSync(outputPath, buffer);
+    console.log(`Dokumen Word berhasil dan disimpan di ${outputPath}`);
+    console.log
+(`
+''    
+`);
+});
 }
 
+// Main function
+async function main() {
+  try {
+    await fetchOpensearchData();
+    await parseAndModifyData();
+    await generateWordDocument();
+  } catch (error) {
+    console.error('Error during processing:', error);
+  }
+}
 
-
-
-// Path to JSON file
-const jsonFilePath = 'D:/magang/json_ke_word/new_file/permenkeu-no-26-tahun-2023-updated.json';
-
-// Read JSON file
-const jsonData = readJsonFile(jsonFilePath);
-
-// Create Word document based on JSON data
-const document = createWordDocument(jsonData);
-
-// Save document to file
-Packer.toBuffer(document).then((buffer) => {
-    fs.writeFileSync('D:/magang/json_ke_word/new_file/ouaaatput.docx', buffer);
-    console.log('Dokumen Word berhasil dibuat: ouaaatput.docx');
-});
+// Run main function
+main();
